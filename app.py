@@ -230,7 +230,23 @@ def process_normalization(job_id, items, api_key=None, provider="gemini", model_
                 "filename": txt_path.name
             })
         except Exception as e:
-            jobs[job_id]["errors"].append({"url": orig_name, "error": str(e)})
+            err_str = str(e)
+            try:
+                # Automatic fallback to rule-based cleanup so user always gets normalized output
+                fallback_text = rule_based_normalize(text)
+                st = safe_title(f"NORMALIZADO_{base_title}")
+                txt_path = NORMALIZED_DIR / f"{st}.txt"
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(fallback_text)
+                jobs[job_id]["results"].append({
+                    "title": f"Normalizado (Limpio): {base_title}",
+                    "url": orig_name,
+                    "text": fallback_text[:500] + ("..." if len(fallback_text) > 500 else ""),
+                    "file": str(txt_path),
+                    "filename": txt_path.name
+                })
+            except Exception:
+                jobs[job_id]["errors"].append({"url": orig_name, "error": err_str})
         jobs[job_id]["done"] = i + 1
     jobs[job_id].update({"status": "done", "current": "¡Completado!"})
 
