@@ -88,19 +88,24 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
             provider = "openai"
 
     if provider == "gemini" and api_key:
-        model = model_name or "gemini-2.0-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{
-                "parts": [{
-                    "text": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"
+        models_to_try = [model_name] if model_name else ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
+        last_err_msg = ""
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            payload = {
+                "contents": [{
+                    "parts": [{
+                        "text": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"
+                    }]
                 }]
-            }]
-        }
-        res = requests.post(url, json=payload, timeout=90)
-        res.raise_for_status()
-        data = res.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            }
+            res = requests.post(url, json=payload, timeout=90)
+            if res.status_code == 200:
+                data = res.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                last_err_msg = res.text
+        raise Exception(f"Error en Gemini API ({res.status_code}): {last_err_msg}")
 
     elif provider == "openai" and api_key:
         model = model_name or "gpt-4o-mini"
