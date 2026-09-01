@@ -78,12 +78,25 @@ def rule_based_normalize(text):
         cleaned_lines.append(stripped)
     return "\n".join(cleaned_lines).strip()
 
-def get_gemini_model_and_ver(api_key):
+def make_gemini_request(url_path, api_key, payload=None, method="POST"):
     import requests
+    headers = {"Content-Type": "application/json"}
+    clean_key = api_key.strip()
+    if clean_key.startswith("AQ.") or clean_key.startswith("ya29."):
+        headers["Authorization"] = f"Bearer {clean_key}"
+        url = f"https://generativelanguage.googleapis.com/{url_path}"
+    else:
+        url = f"https://generativelanguage.googleapis.com/{url_path}?key={clean_key}"
+
+    if method == "GET":
+        return requests.get(url, headers=headers, timeout=15)
+    else:
+        return requests.post(url, headers=headers, json=payload, timeout=90)
+
+def get_gemini_model_and_ver(api_key):
     for ver in ["v1beta", "v1"]:
         try:
-            url = f"https://generativelanguage.googleapis.com/{ver}/models?key={api_key}"
-            res = requests.get(url, timeout=10)
+            res = make_gemini_request(f"{ver}/models", api_key, method="GET")
             if res.status_code == 200:
                 models_data = res.json().get("models", [])
                 gen_models = []
@@ -115,10 +128,6 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
             provider = "openai"
 
     if provider == "gemini" and api_key:
-        if not api_key.startswith("AIzaSy"):
-            # Check if key doesn't start with AIzaSy
-            pass
-            
         chosen_model, api_ver = get_gemini_model_and_ver(api_key) if not model_name else (model_name, "v1beta")
         
         models_to_try = [chosen_model, "gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-pro"]
@@ -128,7 +137,7 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
         last_err_msg = ""
         for model in dedup_models:
             for ver in [api_ver, "v1beta", "v1"]:
-                url = f"https://generativelanguage.googleapis.com/{ver}/models/{model}:generateContent?key={api_key}"
+                url_path = f"{ver}/models/{model}:generateContent"
                 payload = {
                     "contents": [{
                         "parts": [{
@@ -136,15 +145,13 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
                         }]
                     }]
                 }
-                res = requests.post(url, json=payload, timeout=90)
+                res = make_gemini_request(url_path, api_key, payload=payload, method="POST")
                 if res.status_code == 200:
                     data = res.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 else:
                     last_err_msg = f"Model {model} ({ver}): {res.text}"
                     
-        if not api_key.startswith("AIzaSy"):
-            raise Exception(f"Clave API inválida para Google AI Studio. Tu clave empieza por '{api_key[:5]}...' pero las claves de Google AI Studio deben empezar por 'AIzaSy...'. Generá una gratis en https://aistudio.google.com/")
         raise Exception(f"Error en Gemini API: {last_err_msg}")
 
     elif provider == "openai" and api_key:
