@@ -46,37 +46,60 @@ Si te pido archivo:
 
 def rule_based_normalize(text):
     """Fallback rule-based text cleanup when no LLM API key is available."""
+    if not text:
+        return ""
+    
     lines = text.split('\n')
-    cleaned_lines = []
-    video_fillers = [
-        r'(?i)^(hola|buenas|bienvenidos|bienvenidas)\b.*',
-        r'(?i).*en este v[ií]deo.*',
-        r'(?i).*suscr[ií]bete.*',
-        r'(?i).*suscr[ií]banse.*',
-        r'(?i).*dale a la campanita.*',
-        r'(?i).*deja tu (like|me gusta).*',
-        r'(?i).*como pueden ver.*',
-        r'(?i).*nos vemos en el pr[oó]ximo v[ií]deo.*',
-        r'(?i).*gracias por ver.*',
-        r'(?i).*chau|hasta luego|adi[oó]s.*$'
+    header_lines = []
+    content_lines = []
+    
+    for l in lines:
+        if l.startswith("Título:") or l.startswith("URL:") or l.startswith("==") or l.startswith("--"):
+            header_lines.append(l)
+        else:
+            content_lines.append(l)
+            
+    content = "\n".join(content_lines)
+    
+    fillers = [
+        r'(?i)\b(hola|buenas|bienvenidos|bienvenidas)(\s+a\s+todos)?(\s+a\s+un\s+nuevo\s+v[ií]deo|\s+al\s+canal|\s+a\s+este\s+v[ií]deo)?[\s,!.]*',
+        r'(?i)\b(en\s+este\s+v[ií]deo\s+vamos\s+a|en\s+este\s+v[ií]deo\s+veremos|en\s+este\s+v[ií]deo|en\s+este\s+video)\b[\s,!.]*',
+        r'(?i)\b(no\s+olvides\s+suscribirte\s+al\s+canal|no\s+olvides\s+suscribirte|suscr[ií]bete\s+al\s+canal|suscr[ií]banse\s+al\s+canal|suscr[ií]bete|suscr[ií]banse)\b[\s,!.]*',
+        r'(?i)\b(dale\s+a\s+la\s+campanita|deja\s+tu\s+like|deja\s+tu\s+me\s+gusta)\b[\s,!.]*',
+        r'(?i)\b(nos\s+vemos\s+en\s+el\s+pr[oó]ximo\s+v[ií]deo|hasta\s+la\s+pr[oó]xima|chau\s+chau|chau)\b[\s,!.]*',
+        r'(?i)\b(como\s+pueden\s+ver|como\s+puedes\s+ver)\b[\s,!.]*'
     ]
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            if cleaned_lines and cleaned_lines[-1] != "":
-                cleaned_lines.append("")
+    
+    for f in fillers:
+        content = re.sub(f, ' ', content)
+        
+    raw_sentences = re.split(r'(?<=[.!?])\s+|\n+', content)
+    sentences = []
+    for s in raw_sentences:
+        s = s.strip()
+        if not s:
             continue
-        is_filler = False
-        for pat in video_fillers:
-            if re.match(pat, stripped):
-                is_filler = True
-                break
-        if is_filler:
-            continue
-        if len(stripped) > 0:
-            stripped = stripped[0].upper() + stripped[1:]
-        cleaned_lines.append(stripped)
-    return "\n".join(cleaned_lines).strip()
+        s = s[0].upper() + s[1:]
+        if s[-1] not in '.!?':
+            s += '.'
+        sentences.append(s)
+        
+    paragraphs = []
+    current_para = []
+    for s in sentences:
+        current_para.append(s)
+        if len(current_para) >= 4:
+            paragraphs.append(" ".join(current_para))
+            current_para = []
+            
+    if current_para:
+        paragraphs.append(" ".join(current_para))
+        
+    body = "\n\n".join(paragraphs).strip()
+    
+    if header_lines:
+        return "\n".join(header_lines).strip() + "\n\n" + body
+    return body
 
 def make_gemini_request(url_path, api_key, payload=None, method="POST"):
     import requests
