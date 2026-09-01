@@ -44,6 +44,20 @@
   .tab.active-transcribe { background:rgba(124,106,255,.15); color:var(--accent); border-color:var(--accent); }
   .tab.active-video { background:rgba(255,159,91,.15); color:var(--orange); border-color:var(--orange); }
   .tab.active-audio { background:rgba(91,200,255,.15); color:var(--blue); border-color:var(--blue); }
+  .tab.active-normalize { background:rgba(79,255,176,.15); color:var(--green); border-color:var(--green); }
+
+  .drop-zone {
+    border:2px dashed var(--border); border-radius:12px; padding:24px 16px;
+    text-align:center; background:var(--bg); cursor:pointer; transition:all .2s;
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color:var(--green); background:rgba(79,255,176,.05); }
+  .file-queue-list { display:flex; flex-direction:column; gap:6px; max-height:160px; overflow-y:auto; margin-top:8px; }
+  .file-queue-item {
+    display:flex; justify-space-between:space-between; align-items:center;
+    background:var(--bg); border:1px solid var(--border); border-radius:7px;
+    padding:7px 12px; font-size:11px; font-family:'Space Mono',monospace;
+  }
+  .file-remove-btn { color:var(--danger); cursor:pointer; font-weight:bold; padding:0 6px; }
 
   .panel { display:none; }
   .panel.active { display:block; }
@@ -138,6 +152,7 @@
       <button class="tab active-transcribe" onclick="switchTab('transcribe')">🎙️ Transcribir</button>
       <button class="tab" onclick="switchTab('video')">🎬 Descargar Video</button>
       <button class="tab" onclick="switchTab('audio')">🎵 Descargar Audio</button>
+      <button class="tab" onclick="switchTab('normalize')">✨ Normalizar Texto</button>
     </div>
 
     <!-- PANEL TRANSCRIBIR -->
@@ -183,6 +198,48 @@ https://www.youtube.com/watch?v=OTRO_ID
 
 Descarga en MP3 · 192kbps"></textarea>
         <button class="btn btn-blue" id="btn-audio" onclick="startJob('audio')">⬇&nbsp; Descargar Audios (MP3)</button>
+      </div>
+    </div>
+
+    <!-- PANEL NORMALIZAR -->
+    <div class="panel" id="panel-normalize">
+      <div class="card">
+        <div class="card-title">Subir archivos .txt para normalizar</div>
+        
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input-normalize').click()">
+          <div style="font-size:26px;margin-bottom:6px">📁</div>
+          <div style="font-weight:600;font-size:13px;color:var(--text)">Arrastrá tus archivos .txt aquí o hacé clic para seleccionar</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">Podés seleccionar o arrastrar múltiples archivos .txt</div>
+          <input type="file" id="file-input-normalize" accept=".txt" multiple style="display:none" onchange="handleFilesSelected(event)">
+        </div>
+
+        <div id="file-queue-wrap" style="display:none;margin-top:14px">
+          <div class="card-title" style="margin-bottom:6px">Archivos seleccionados (<span id="file-count-num">0</span>)</div>
+          <div class="file-queue-list" id="file-queue-list"></div>
+        </div>
+
+        <div style="margin-top:14px">
+          <div class="card-title" style="margin-bottom:6px">O pegá texto directo aquí</div>
+          <textarea id="raw-text-normalize" placeholder="Pegá el texto que quieras normalizar si no subís archivos .txt..."></textarea>
+        </div>
+
+        <div class="options-row" style="margin-top:14px;gap:12px;align-items:flex-end">
+          <div style="flex:1;min-width:180px">
+            <label style="display:block;margin-bottom:4px;font-size:11px;color:var(--muted)">Motor de IA:</label>
+            <select id="normalize-provider" onchange="toggleApiKeyField()">
+              <option value="gemini" selected>Google Gemini (Recomendado)</option>
+              <option value="openai">OpenAI (GPT-4o-mini)</option>
+              <option value="ollama">Ollama (Local / Llama3)</option>
+              <option value="rule">Normalización limpia (sin API key)</option>
+            </select>
+          </div>
+          <div style="flex:2;min-width:220px" id="api-key-wrap">
+            <label style="display:block;margin-bottom:4px;font-size:11px;color:var(--muted)">API Key (se guarda en tu navegador):</label>
+            <input type="password" id="normalize-api-key" placeholder="AIzaSy... o sk-..." onchange="saveApiKey()" />
+          </div>
+        </div>
+
+        <button class="btn btn-green" id="btn-normalize" onclick="startNormalizeJob()" style="width:100%;margin-top:16px;justify-content:center">✨&nbsp; Normalizar y Estructurar Textos</button>
       </div>
     </div>
 
@@ -399,10 +456,140 @@ function showResults(job) {
   }
 }
 
+let selectedNormalizeFiles = [];
+
+function toggleApiKeyField() {
+  const provider = document.getElementById('normalize-provider').value;
+  const wrap = document.getElementById('api-key-wrap');
+  if (provider === 'ollama' || provider === 'rule') {
+    wrap.style.display = 'none';
+  } else {
+    wrap.style.display = 'block';
+  }
+}
+
+function saveApiKey() {
+  const key = document.getElementById('normalize-api-key').value.trim();
+  if (key) localStorage.setItem('yt_normalize_api_key', key);
+}
+
+function handleFilesSelected(evt) {
+  const files = Array.from(evt.target.files);
+  selectedNormalizeFiles = selectedNormalizeFiles.concat(files);
+  renderFileQueue();
+}
+
+function renderFileQueue() {
+  const wrap = document.getElementById('file-queue-wrap');
+  const list = document.getElementById('file-queue-list');
+  const num = document.getElementById('file-count-num');
+  
+  if (!selectedNormalizeFiles.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  
+  wrap.style.display = 'block';
+  num.textContent = selectedNormalizeFiles.length;
+  list.innerHTML = '';
+  
+  selectedNormalizeFiles.forEach((f, idx) => {
+    const sizeKB = (f.size / 1024).toFixed(1);
+    list.innerHTML += `
+      <div class="file-queue-item">
+        <span>📄 ${esc(f.name)} (${sizeKB} KB)</span>
+        <span class="file-remove-btn" onclick="removeNormalizeFile(${idx})">✕</span>
+      </div>
+    `;
+  });
+}
+
+function removeNormalizeFile(idx) {
+  selectedNormalizeFiles.splice(idx, 1);
+  renderFileQueue();
+}
+
+async function startNormalizeJob() {
+  const rawText = document.getElementById('raw-text-normalize').value.trim();
+  if (!selectedNormalizeFiles.length && !rawText) {
+    alert('Subí al menos un archivo .txt o pegá un texto.');
+    return;
+  }
+
+  const provider = document.getElementById('normalize-provider').value;
+  const apiKey = document.getElementById('normalize-api-key').value.trim();
+
+  document.getElementById('btn-normalize').disabled = true;
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('results-section').style.display = 'none';
+
+  const formData = new FormData();
+  formData.append('provider', provider);
+  formData.append('api_key', apiKey);
+
+  selectedNormalizeFiles.forEach(f => {
+    formData.append('files', f);
+  });
+
+  if (rawText) {
+    formData.append('raw_text', rawText);
+  }
+
+  try {
+    const r = await fetch('/start_normalize', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await r.json();
+    if (data.error) {
+      alert(data.error);
+      document.getElementById('btn-normalize').disabled = false;
+      document.getElementById('progress-section').style.display = 'none';
+      return;
+    }
+    currentJobId = data.job_id;
+    pollInterval = setInterval(pollStatus, 1500);
+  } catch(e) {
+    alert('Error al iniciar la normalización.');
+    document.getElementById('btn-normalize').disabled = false;
+    document.getElementById('progress-section').style.display = 'none';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const savedKey = localStorage.getItem('yt_normalize_api_key');
+  if (savedKey) {
+    const input = document.getElementById('normalize-api-key');
+    if (input) input.value = savedKey;
+  }
+
+  const dz = document.getElementById('drop-zone');
+  if (dz) {
+    ['dragenter', 'dragover'].forEach(name => {
+      dz.addEventListener(name, (e) => { e.preventDefault(); dz.classList.add('dragover'); });
+    });
+    ['dragleave', 'drop'].forEach(name => {
+      dz.addEventListener(name, (e) => { e.preventDefault(); dz.classList.remove('dragover'); });
+    });
+    dz.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) {
+        const txtFiles = Array.from(dt.files).filter(f => f.name.toLowerCase().endsWith('.txt'));
+        if (txtFiles.length) {
+          selectedNormalizeFiles = selectedNormalizeFiles.concat(txtFiles);
+          renderFileQueue();
+        } else {
+          alert('Por favor selecciona únicamente archivos con extensión .txt');
+        }
+      }
+    });
+  }
+});
+
 function resetApp() {
   if (pollInterval) clearInterval(pollInterval);
   currentJobId = null;
-  ['transcribe','video','audio'].forEach(t => {
+  ['transcribe','video','audio','normalize'].forEach(t => {
     const b = document.getElementById('btn-' + t);
     if (b) b.disabled = false;
   });

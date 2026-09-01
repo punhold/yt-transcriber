@@ -15,8 +15,151 @@ DOWNLOAD_DIR = Path("downloads")
 OUTPUT_DIR = Path("transcriptions")
 VIDEO_DIR = Path("videos")
 AUDIO_DIR = Path("audios")
-for d in [DOWNLOAD_DIR, OUTPUT_DIR, VIDEO_DIR, AUDIO_DIR]:
+NORMALIZED_DIR = Path("normalized")
+for d in [DOWNLOAD_DIR, OUTPUT_DIR, VIDEO_DIR, AUDIO_DIR, NORMALIZED_DIR]:
     d.mkdir(exist_ok=True)
+
+NORMALIZATION_SYSTEM_PROMPT = """Tu tarea es procesar el texto cumpliendo estrictamente estas reglas:
+* NO agregar contenido nuevo
+* NO resumir
+* NO interpretar ni cambiar ideas
+* Mantener el contenido original lo más intacto posible
+Solo debes:
+* Corregir ortografía y errores tipográficos
+* Corregir puntuación (comas, puntos, etc.)
+* Mejorar levemente la redacción para que fluya como texto escrito
+* Eliminar o adaptar frases propias de video (ej: “bienvenidos”, “en este video”, “como pueden ver”, etc.)
+* Convertir el texto a formato de artículo (neutral, sin saludos ni cierres hablados)
+Formato de salida:
+* Texto limpio
+* Con saltos de línea correctos
+* Mantener párrafos (no hacer bloques gigantes)
+* Con el título original al inicio
+Además:
+* No agregues comentarios, explicaciones ni introducciones
+* No cierres con frases del tipo “si querés puedo…”
+Si te paso varios textos:
+* Procesarlos por separado
+* Mantener consistencia entre todos
+Si te pido archivo:
+* Entregar en formato .txt"""
+
+def rule_based_normalize(text):
+    """Fallback rule-based text cleanup when no LLM API key is available."""
+    lines = text.split('\n')
+    cleaned_lines = []
+    video_fillers = [
+        r'(?i)^(hola|buenas|bienvenidos|bienvenidas)\b.*',
+        r'(?i).*en este v[ií]deo.*',
+        r'(?i).*suscr[ií]bete.*',
+        r'(?i).*suscr[ií]banse.*',
+        r'(?i).*dale a la campanita.*',
+        r'(?i).*deja tu (like|me gusta).*',
+        r'(?i).*como pueden ver.*',
+        r'(?i).*nos vemos en el pr[oó]ximo v[ií]deo.*',
+        r'(?i).*gracias por ver.*',
+        r'(?i).*chau|hasta luego|adi[oó]s.*$'
+    ]
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+        is_filler = False
+        for pat in video_fillers:
+            if re.match(pat, stripped):
+                is_filler = True
+                break
+        if is_filler:
+            continue
+        if len(stripped) > 0:
+            stripped = stripped[0].upper() + stripped[1:]
+        cleaned_lines.append(stripped)
+    return "\n".join(cleaned_lines).strip()
+
+def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_name=None):
+    """Normalize text using LLM (Gemini / OpenAI / Ollama) or rule-based fallback."""
+    import os, requests
+    
+    if not api_key:
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if os.environ.get("OPENAI_API_KEY") and not os.environ.get("GEMINI_API_KEY"):
+            provider = "openai"
+
+    if provider == "gemini" and api_key:
+        model = model_name or "gemini-2.0-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [{
+                    "text": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"
+                }]
+            }]
+        }
+        res = requests.post(url, json=payload, timeout=90)
+        res.raise_for_status()
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+    elif provider == "openai" and api_key:
+        model = model_name or "gpt-4o-mini"
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": NORMALIZATION_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Nombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"}
+            ]
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=90)
+        res.raise_for_status()
+        data = res.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+    elif provider == "ollama":
+        url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": model_name or "llama3",
+            "prompt": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}",
+            "stream": False
+        }
+        res = requests.post(url, json=payload, timeout=120)
+        res.raise_for_status()
+        return res.json()["response"].strip()
+
+    else:
+        return rule_based_normalize(text)
+
+def process_normalization(job_id, items, api_key=None, provider="gemini", model_name=None):
+    """Process batch text normalization items."""
+    jobs[job_id].update({"status": "running", "total": len(items), "done": 0,
+                         "results": [], "errors": [], "current": f"{len(items)} textos. Iniciando normalización..."})
+    for i, item in enumerate(items):
+        orig_name = item.get("filename", f"texto_{i+1}.txt")
+        text = item.get("text", "")
+        base_title = Path(orig_name).stem
+        try:
+            jobs[job_id]["current"] = f"Normalizando ({i+1}/{len(items)}): {base_title[:40]}..."
+            normalized_text = call_llm_normalize(text, orig_name, api_key=api_key, provider=provider, model_name=model_name)
+            
+            st = safe_title(f"NORMALIZADO_{base_title}")
+            txt_path = NORMALIZED_DIR / f"{st}.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(normalized_text)
+                
+            jobs[job_id]["results"].append({
+                "title": f"Normalizado: {base_title}",
+                "url": orig_name,
+                "text": normalized_text[:500] + ("..." if len(normalized_text) > 500 else ""),
+                "file": str(txt_path),
+                "filename": txt_path.name
+            })
+        except Exception as e:
+            jobs[job_id]["errors"].append({"url": orig_name, "error": str(e)})
+        jobs[job_id]["done"] = i + 1
+    jobs[job_id].update({"status": "done", "current": "¡Completado!"})
 
 def find_ffmpeg():
     if shutil.which("ffmpeg"):
@@ -231,6 +374,50 @@ def start_audio():
     job_id = make_job(urls, "audio")
     return jsonify({"job_id": job_id, "url_count": len(urls)})
 
+@app.route("/start_normalize", methods=["POST"])
+def start_normalize():
+    api_key = None
+    provider = "gemini"
+    model_name = None
+    items = []
+    
+    if request.is_json:
+        data = request.json or {}
+        api_key = data.get("api_key", "").strip() or None
+        provider = data.get("provider", "gemini")
+        model_name = data.get("model", None)
+        raw_items = data.get("items", [])
+        for idx, item in enumerate(raw_items):
+            if item.get("text"):
+                items.append({
+                    "filename": item.get("filename") or f"texto_{idx+1}.txt",
+                    "text": item.get("text")
+                })
+    else:
+        api_key = request.form.get("api_key", "").strip() or None
+        provider = request.form.get("provider", "gemini")
+        model_name = request.form.get("model", None)
+        uploaded_files = request.files.getlist("files")
+        for f in uploaded_files:
+            if f.filename:
+                content = f.read().decode("utf-8", errors="ignore")
+                items.append({"filename": f.filename, "text": content})
+                
+        raw_text = request.form.get("raw_text", "").strip()
+        if raw_text:
+            items.append({"filename": "texto_manual.txt", "text": raw_text})
+
+    if not items:
+        return jsonify({"error": "No se proporcionaron archivos o textos para normalizar."}), 400
+
+    job_id = f"normalize_{int(time.time())}"
+    jobs[job_id] = {"status": "pending", "current": "Iniciando...", "total": 0,
+                    "done": 0, "results": [], "errors": [], "type": "normalize"}
+    t = threading.Thread(target=process_normalization, args=(job_id, items, api_key, provider, model_name))
+    t.daemon = True
+    t.start()
+    return jsonify({"job_id": job_id, "file_count": len(items)})
+
 @app.route("/status/<job_id>")
 def job_status(job_id):
     if job_id not in jobs:
@@ -276,7 +463,7 @@ def download_zip(job_id):
         if cf and Path(cf).exists():
             zf.write(cf, arcname=jobs[job_id]["combined_filename"])
     buf.seek(0)
-    prefix = {"transcribe": "transcripciones", "video": "videos", "audio": "audios"}.get(job_type, "archivos")
+    prefix = {"transcribe": "transcripciones", "video": "videos", "audio": "audios", "normalize": "textos_normalizados"}.get(job_type, "archivos")
     zip_name = f"{prefix}_{time.strftime('%Y-%m-%d_%H-%M')}.zip"
     response = send_file(buf, as_attachment=True, download_name=zip_name, mimetype="application/zip")
     cleanup_job(job_id)
