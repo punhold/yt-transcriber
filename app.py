@@ -119,15 +119,32 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
         return data["choices"][0]["message"]["content"].strip()
 
     elif provider == "ollama":
+        if not model_name:
+            try:
+                tags_res = requests.get("http://localhost:11434/api/tags", timeout=3)
+                if tags_res.status_code == 200:
+                    models = [m.get("name") for m in tags_res.json().get("models", [])]
+                    if "deepseek-r1:7b" in models:
+                        model_name = "deepseek-r1:7b"
+                    elif "llama3" in models:
+                        model_name = "llama3"
+                    elif models:
+                        model_name = models[0]
+            except Exception:
+                pass
+        model = model_name or "deepseek-r1:7b"
         url = "http://localhost:11434/api/generate"
         payload = {
-            "model": model_name or "llama3",
+            "model": model,
             "prompt": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}",
             "stream": False
         }
-        res = requests.post(url, json=payload, timeout=120)
+        res = requests.post(url, json=payload, timeout=180)
         res.raise_for_status()
-        return res.json()["response"].strip()
+        resp_text = res.json().get("response", "").strip()
+        # Clean DeepSeek R1 reasoning tags <think>...</think>
+        resp_text = re.sub(r'<think>.*?</think>', '', resp_text, flags=re.DOTALL).strip()
+        return resp_text
 
     else:
         return rule_based_normalize(text)
