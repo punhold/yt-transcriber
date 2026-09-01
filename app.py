@@ -137,9 +137,13 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
         payload = {
             "model": model,
             "prompt": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}",
-            "stream": False
+            "stream": False,
+            "options": {
+                "num_predict": 2048,
+                "temperature": 0.3
+            }
         }
-        res = requests.post(url, json=payload, timeout=180)
+        res = requests.post(url, json=payload, timeout=600)
         res.raise_for_status()
         resp_text = res.json().get("response", "").strip()
         # Clean DeepSeek R1 reasoning tags <think>...</think>

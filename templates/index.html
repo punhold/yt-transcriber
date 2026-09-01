@@ -227,7 +227,7 @@ Descarga en MP3 · 192kbps"></textarea>
           <div style="flex:1;min-width:180px">
             <label style="display:block;margin-bottom:4px;font-size:11px;color:var(--muted)">Motor de IA:</label>
             <select id="normalize-provider" onchange="toggleApiKeyField()">
-              <option value="gemini" selected>Google Gemini (Recomendado)</option>
+              <option value="gemini" selected>Google Gemini (Ultrarrápido ⚡)</option>
               <option value="openai">OpenAI (GPT-4o-mini)</option>
               <option value="ollama">Ollama (Local / DeepSeek-R1)</option>
               <option value="rule">Normalización limpia (sin API key)</option>
@@ -237,6 +237,10 @@ Descarga en MP3 · 192kbps"></textarea>
             <label style="display:block;margin-bottom:4px;font-size:11px;color:var(--muted)">API Key (se guarda en tu navegador):</label>
             <input type="password" id="normalize-api-key" placeholder="AIzaSy... o sk-..." onchange="saveApiKey()" />
           </div>
+        </div>
+
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5;background:var(--bg);padding:8px 12px;border-radius:8px;border:1px solid var(--border)">
+          💡 <b>Nota de velocidad:</b> <strong>Google Gemini</strong> y <strong>OpenAI</strong> procesan en 2 segundos. <strong>Ollama Local</strong> procesa en el procesador CPU del servidor y para textos extensos puede requerir varios minutos.
         </div>
 
         <button class="btn btn-green" id="btn-normalize" onclick="startNormalizeJob()" style="width:100%;margin-top:16px;justify-content:center">✨&nbsp; Normalizar y Estructurar Textos</button>
