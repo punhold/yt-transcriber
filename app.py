@@ -78,6 +78,33 @@ def rule_based_normalize(text):
         cleaned_lines.append(stripped)
     return "\n".join(cleaned_lines).strip()
 
+def get_gemini_model_and_ver(api_key):
+    import requests
+    for ver in ["v1beta", "v1"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/{ver}/models?key={api_key}"
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                models_data = res.json().get("models", [])
+                gen_models = []
+                for m in models_data:
+                    name = m.get("name", "").replace("models/", "")
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        gen_models.append((name, ver))
+                
+                for name, v in gen_models:
+                    if "flash" in name:
+                        return name, v
+                for name, v in gen_models:
+                    if "pro" in name:
+                        return name, v
+                if gen_models:
+                    return gen_models[0][0], gen_models[0][1]
+        except Exception:
+            pass
+    return "gemini-1.5-flash", "v1beta"
+
 def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_name=None):
     """Normalize text using LLM (Gemini / OpenAI / Ollama) or rule-based fallback."""
     import os, requests
@@ -88,24 +115,37 @@ def call_llm_normalize(text, filename, api_key=None, provider="gemini", model_na
             provider = "openai"
 
     if provider == "gemini" and api_key:
-        models_to_try = [model_name] if model_name else ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro"]
+        if not api_key.startswith("AIzaSy"):
+            # Check if key doesn't start with AIzaSy
+            pass
+            
+        chosen_model, api_ver = get_gemini_model_and_ver(api_key) if not model_name else (model_name, "v1beta")
+        
+        models_to_try = [chosen_model, "gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-pro"]
+        seen = set()
+        dedup_models = [m for m in models_to_try if not (m in seen or seen.add(m))]
+        
         last_err_msg = ""
-        for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            payload = {
-                "contents": [{
-                    "parts": [{
-                        "text": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"
+        for model in dedup_models:
+            for ver in [api_ver, "v1beta", "v1"]:
+                url = f"https://generativelanguage.googleapis.com/{ver}/models/{model}:generateContent?key={api_key}"
+                payload = {
+                    "contents": [{
+                        "parts": [{
+                            "text": f"{NORMALIZATION_SYSTEM_PROMPT}\n\nNombre de archivo original: {filename}\n\nTexto a procesar:\n{text}"
+                        }]
                     }]
-                }]
-            }
-            res = requests.post(url, json=payload, timeout=90)
-            if res.status_code == 200:
-                data = res.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            else:
-                last_err_msg = res.text
-        raise Exception(f"Error en Gemini API ({res.status_code}): {last_err_msg}")
+                }
+                res = requests.post(url, json=payload, timeout=90)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                else:
+                    last_err_msg = f"Model {model} ({ver}): {res.text}"
+                    
+        if not api_key.startswith("AIzaSy"):
+            raise Exception(f"Clave API inválida para Google AI Studio. Tu clave empieza por '{api_key[:5]}...' pero las claves de Google AI Studio deben empezar por 'AIzaSy...'. Generá una gratis en https://aistudio.google.com/")
+        raise Exception(f"Error en Gemini API: {last_err_msg}")
 
     elif provider == "openai" and api_key:
         model = model_name or "gpt-4o-mini"
